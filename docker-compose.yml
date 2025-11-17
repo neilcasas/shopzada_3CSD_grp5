@@ -15,11 +15,11 @@ services:
     ports:
       - "8080:8080"
     command: >
-      bash -c "airflow db init &&
+      bash -c "airflow db migrate &&
                airflow scheduler & 
                airflow webserver"
     env_file:
-      - ./infra/.env
+      - .env
 
   dbt:
     image: python:3.11-slim
