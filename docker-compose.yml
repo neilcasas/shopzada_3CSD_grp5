@@ -1,12 +1,30 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   airflow:
     image: apache/airflow:3.1.3
     container_name: airflow
     restart: always
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgres://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME
-      AIRFLOW__CORE__FERNET_KEY: "YOUR_FERNET_KEY" # generate via: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
     volumes:
       - ./workflows/airflow_dags:/opt/airflow/dags
@@ -16,10 +34,14 @@ services:
       - "8080:8080"
     command: >
       bash -c "airflow db migrate &&
-               airflow scheduler & 
-               airflow webserver"
+          airflow users create --username ${AIRFLOW_USER} --firstname Airflow --lastname Admin --role Admin --email admin@example.com --password ${AIRFLOW_PASSWORD} &&
+          airflow scheduler &
+          airflow api-webserver" # The webserver command is back for the UI, but the API is separate
     env_file:
       - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   dbt:
     image: python:3.11-slim
@@ -31,7 +53,15 @@ services:
       - ./infra/.env:/usr/src/app/.env
     environment:
       DBT_PROFILES_DIR: /usr/src/app
+    env_file:
+      - .env
     command: >
       bash -c "pip install --upgrade pip &&
                pip install dbt-core dbt-postgres psycopg2-binary &&
                tail -f /dev/null"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
