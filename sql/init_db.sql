@@ -1,5 +1,5 @@
 CREATE DATABASE shopzada;
-
+GRANT ALL PRIVILEGES ON DATABASE shopzada TO airflow;
 \c shopzada;
 
 CREATE SCHEMA IF NOT EXISTS staging;
