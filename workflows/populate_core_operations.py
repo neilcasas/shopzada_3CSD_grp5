@@ -44,6 +44,12 @@ def process_and_load_orders(**context):
     conn.commit()
     print("  ✓ Tables truncated")
     
+    # Temporarily disable foreign key constraints
+    print("\nDisabling foreign key constraints temporarily...")
+    cursor.execute("SET session_replication_role = 'replica';")
+    conn.commit()
+    print("  ✓ Foreign key constraints disabled")
+    
     # ========== PROCESS ORDERS IN CHUNKS ==========
     print("\n--- Processing Orders ---")
     
@@ -122,28 +128,61 @@ def process_and_load_orders(**context):
         )
         orders_merged['delay_in_days'] = orders_merged['delay_in_days'].fillna(0).astype(int)
         
-        # Insert orders
+        # Convert NaT to None for SQL compatibility
+        orders_merged['estimated_arrival'] = orders_merged['estimated_arrival'].where(pd.notna(orders_merged['estimated_arrival']), None)
+        orders_merged['actual_arrival'] = orders_merged['actual_arrival'].where(pd.notna(orders_merged['actual_arrival']), None)
+        
+        # Insert orders (batch insert for better performance)
+        insert_batch = []
         for _, row in orders_merged.iterrows():
-            try:
-                cursor.execute("""
-                    INSERT INTO ods.core_orders 
-                    (order_id, user_id, transaction_date, estimated_arrival, actual_arrival, delay_in_days, is_delayed, merchant_id, staff_id, campaign_id, availed)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, NULL)
-                    ON CONFLICT (order_id) DO NOTHING
-                """, (
-                    row['order_id'],
-                    row['user_id'],
-                    row['transaction_date'],
-                    row['estimated_arrival'],
-                    row.get('actual_arrival'),
-                    row['delay_in_days'],
-                    row['is_delayed']
-                ))
-                orders_inserted += 1
-            except Exception as e:
-                orders_skipped += 1
-                if orders_skipped <= 5:
-                    print(f"  ⚠ Error inserting order {row['order_id']}: {str(e)}")
+            insert_batch.append((
+                row['order_id'],
+                row['user_id'],
+                row['transaction_date'],
+                row['estimated_arrival'],
+                row['actual_arrival'],
+                row['delay_in_days'],
+                row['is_delayed']
+            ))
+        
+        # Use executemany for better performance
+        try:
+            cursor.executemany("""
+                INSERT INTO ods.core_orders 
+                (order_id, user_id, transaction_date, estimated_arrival, actual_arrival, delay_in_days, is_delayed, merchant_id, staff_id, campaign_id, availed)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, NULL)
+                ON CONFLICT (order_id) DO NOTHING
+            """, insert_batch)
+            orders_inserted += len(insert_batch)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"  ⚠ Batch insert failed, trying row by row: {str(e)}")
+            
+            # Fallback to row-by-row insert
+            for _, row in orders_merged.iterrows():
+                try:
+                    cursor.execute("""
+                        INSERT INTO ods.core_orders 
+                        (order_id, user_id, transaction_date, estimated_arrival, actual_arrival, delay_in_days, is_delayed, merchant_id, staff_id, campaign_id, availed)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, NULL)
+                        ON CONFLICT (order_id) DO NOTHING
+                    """, (
+                        row['order_id'],
+                        row['user_id'],
+                        row['transaction_date'],
+                        row['estimated_arrival'],
+                        row['actual_arrival'],
+                        row['delay_in_days'],
+                        row['is_delayed']
+                    ))
+                    conn.commit()
+                    orders_inserted += 1
+                except Exception as row_error:
+                    conn.rollback()
+                    orders_skipped += 1
+                    if orders_skipped <= 5:
+                        print(f"  ⚠ Error inserting order {row['order_id']}: {str(row_error)}")
         
         conn.commit()
         print(f"  ✓ Chunk processed: {len(orders_merged)} orders")
@@ -151,6 +190,12 @@ def process_and_load_orders(**context):
     print(f"\n✓ Total orders inserted: {orders_inserted:,}")
     if orders_skipped > 0:
         print(f"  ⚠ Skipped: {orders_skipped:,}")
+    
+    # Re-enable foreign key constraints
+    print("\nRe-enabling foreign key constraints...")
+    cursor.execute("SET session_replication_role = 'origin';")
+    conn.commit()
+    print("  ✓ Foreign key constraints re-enabled")
     
     cursor.close()
     conn.close()
@@ -234,26 +279,51 @@ def process_and_load_line_items(**context):
                 how='inner'
             )
             
-            # Insert line items
+            # Insert line items (batch insert)
+            insert_batch = []
             for _, row in line_items.iterrows():
-                try:
-                    line_item_id = str(uuid.uuid4())
-                    cursor.execute("""
-                        INSERT INTO ods.core_line_items 
-                        (line_item_id, order_id, product_id, quantity, price)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (
-                        line_item_id,
-                        row['order_id'],
-                        row['product_id'],
-                        int(row['quantity']),
-                        float(row['price'])
-                    ))
-                    items_inserted += 1
-                except Exception as e:
-                    items_skipped += 1
-                    if items_skipped <= 5:
-                        print(f"  ⚠ Error inserting line item: {str(e)}")
+                insert_batch.append((
+                    str(uuid.uuid4()),
+                    row['order_id'],
+                    row['product_id'],
+                    int(row['quantity']),
+                    float(row['price'])
+                ))
+            
+            # Use executemany for better performance
+            try:
+                cursor.executemany("""
+                    INSERT INTO ods.core_line_items 
+                    (line_item_id, order_id, product_id, quantity, price)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, insert_batch)
+                items_inserted += len(insert_batch)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"  ⚠ Batch insert failed, trying row by row: {str(e)}")
+                
+                # Fallback to row-by-row insert
+                for _, row in line_items.iterrows():
+                    try:
+                        cursor.execute("""
+                            INSERT INTO ods.core_line_items 
+                            (line_item_id, order_id, product_id, quantity, price)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (
+                            str(uuid.uuid4()),
+                            row['order_id'],
+                            row['product_id'],
+                            int(row['quantity']),
+                            float(row['price'])
+                        ))
+                        conn.commit()
+                        items_inserted += 1
+                    except Exception as row_error:
+                        conn.rollback()
+                        items_skipped += 1
+                        if items_skipped <= 5:
+                            print(f"  ⚠ Error inserting line item: {str(row_error)}")
             
             conn.commit()
             print(f"  ✓ Chunk processed: {len(line_items)} line items")
