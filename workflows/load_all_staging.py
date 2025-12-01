@@ -32,7 +32,6 @@ with DAG(
     start = EmptyOperator(task_id='start')
     finish = EmptyOperator(task_id='finish')
 
-    previous_task = start
     for dag_id in DEPARTMENT_DAG_IDS:
         trigger = TriggerDagRunOperator(
             task_id=f'trigger_{dag_id}',
@@ -41,7 +40,4 @@ with DAG(
             wait_for_completion=True,
             poke_interval=30,
         )
-        previous_task >> trigger
-        previous_task = trigger
-
-    previous_task >> finish
+        start >> trigger >> finish

@@ -3,6 +3,7 @@ from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import pandas as pd
 import os
+import csv
 from pathlib import Path
 from sqlalchemy import create_engine
 
@@ -25,13 +26,14 @@ def get_source_path():
         '/opt/airflow/source/marketing-department',
         '/home/vgr/dev/school/shopzada_3CSD_grp5/source/marketing-department'
     ]
-    
+
     for path in base_paths:
         if os.path.exists(path):
             print(f"Using source path: {path}")
             return path
-    
+
     raise FileNotFoundError(f"Could not find source files in any of: {base_paths}")
+
 
 def get_db_engine():
     return create_engine(
@@ -41,6 +43,39 @@ def get_db_engine():
         f"{os.getenv('POSTGRES_PORT', '5432')}/shopzada"
     )
 
+
+def normalize_column_name(column_name):
+    if not isinstance(column_name, str):
+        return column_name
+
+    stripped = column_name.strip()
+
+    if not stripped or stripped.lower().startswith('unnamed:'):
+        return 'raw_index'
+
+    normalized = stripped.lower().replace(' ', '_').replace('-', '_')
+    while '__' in normalized:
+        normalized = normalized.replace('__', '_')
+    return normalized
+
+
+def detect_csv_delimiter(file_path):
+    with open(file_path, 'r', newline='') as csvfile:
+        sample = csvfile.read(4096)
+        csvfile.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=[',', '\t', ';', '|'])
+            return dialect.delimiter
+        except csv.Error:
+            return ','
+
+
+def ensure_raw_index(df):
+    if 'raw_index' not in df.columns:
+        df.insert(0, 'raw_index', range(len(df)))
+    return df
+
+
 def detect_and_load_file(file_path):
     file_ext = Path(file_path).suffix.lower()
     file_name = Path(file_path).name
@@ -49,12 +84,10 @@ def detect_and_load_file(file_path):
 
     try:
         if file_ext == '.csv':
-            try:
-                df = pd.read_csv(file_path, index_col=0)
-                df.reset_index(inplace=True)
-                df.rename(columns={df.columns[0]: 'raw_index'}, inplace=True)
-            except:
-                df = pd.read_csv(file_path)
+            delimiter = detect_csv_delimiter(file_path)
+            df = pd.read_csv(file_path, sep=delimiter, dtype=str)
+            df.columns = [normalize_column_name(col) for col in df.columns]
+            df = ensure_raw_index(df)
             print("  → Loaded as CSV")
         else:
             print(f"  ✗ Unsupported file type: {file_ext}")
