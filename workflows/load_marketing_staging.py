@@ -2,8 +2,8 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 import pandas as pd
-import os
 import csv
+import os
 from pathlib import Path
 from sqlalchemy import create_engine
 
@@ -45,11 +45,13 @@ def get_db_engine():
 
 
 def normalize_column_name(column_name):
+    """Normalize column names: lowercase, replace spaces/dashes with underscores."""
     if not isinstance(column_name, str):
         return column_name
 
     stripped = column_name.strip()
 
+    # Handle empty or unnamed columns
     if not stripped or stripped.lower().startswith('unnamed:'):
         return 'raw_index'
 
@@ -60,6 +62,7 @@ def normalize_column_name(column_name):
 
 
 def detect_csv_delimiter(file_path):
+    """Auto-detect CSV delimiter using csv.Sniffer."""
     with open(file_path, 'r', newline='') as csvfile:
         sample = csvfile.read(4096)
         csvfile.seek(0)
@@ -70,13 +73,8 @@ def detect_csv_delimiter(file_path):
             return ','
 
 
-def ensure_raw_index(df):
-    if 'raw_index' not in df.columns:
-        df.insert(0, 'raw_index', range(len(df)))
-    return df
-
-
 def detect_and_load_file(file_path):
+    """Load CSV file with auto-detected delimiter and normalized columns."""
     file_ext = Path(file_path).suffix.lower()
     file_name = Path(file_path).name
 
@@ -85,10 +83,16 @@ def detect_and_load_file(file_path):
     try:
         if file_ext == '.csv':
             delimiter = detect_csv_delimiter(file_path)
+            print(f"  → Detected delimiter: {repr(delimiter)}")
+            
             df = pd.read_csv(file_path, sep=delimiter, dtype=str)
             df.columns = [normalize_column_name(col) for col in df.columns]
-            df = ensure_raw_index(df)
-            print("  → Loaded as CSV")
+
+            # Ensure raw_index exists
+            if 'raw_index' not in df.columns:
+                df.insert(0, 'raw_index', range(len(df)))
+
+            print(f"  → Loaded as CSV with columns: {df.columns.tolist()}")
         else:
             print(f"  ✗ Unsupported file type: {file_ext}")
             return None, None
@@ -98,7 +102,10 @@ def detect_and_load_file(file_path):
 
     except Exception as e:
         print(f"  ✗ Error loading file: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None, None
+
 
 # -------------------------------------------------------------------
 # ETL Load Logic
@@ -126,23 +133,37 @@ def load_marketing_staging_data(**context):
         df, file_name = detect_and_load_file(str(file_path))
 
         if df is None:
+            load_summary.append({
+                "file": file_path.name,
+                "table": "N/A",
+                "rows": 0,
+                "status": "LOAD_FAILED"
+            })
             continue
 
-        # Decide target table
-        if "campaign_data" in file_name.lower():
-            table_name = "mkt_campaigns_raw"
-            expected_cols = ['raw_index', 'campaign_id', 'campaign_name', 'campaign_description', 'discount']
+        # Decide target table based on filename
+        file_lower = file_name.lower()
         
-        elif "transactional_campaign_data" in file_name.lower():
+        if "transactional_campaign_data" in file_lower:
             table_name = "mkt_campaign_transactions_raw"
             expected_cols = ['raw_index', 'transaction_date', 'campaign_id', 'order_id',
                              'estimated_arrival', 'availed']
-        
+        elif "campaign_data" in file_lower:
+            table_name = "mkt_campaigns_raw"
+            expected_cols = ['raw_index', 'campaign_id', 'campaign_name', 'campaign_description', 'discount']
         else:
             print(f"⚠ Unrecognized file type for marketing: {file_name}")
+            load_summary.append({
+                "file": file_name,
+                "table": "UNKNOWN",
+                "rows": len(df),
+                "status": "SKIPPED"
+            })
             continue
 
         print(f" → Target table: staging.{table_name}")
+        print(f" → DataFrame columns: {df.columns.tolist()}")
+        print(f" → Expected columns: {expected_cols}")
 
         # Convert all fields to VARCHAR (staging requirement)
         for col in df.columns:
@@ -152,10 +173,14 @@ def load_marketing_staging_data(**context):
         df['_source_file'] = file_name
         df['_ingested_at'] = pd.Timestamp.now()
 
-        # Select only expected columns + metadata
+        # Select only expected columns + metadata that exist in the dataframe
         available_cols = [c for c in expected_cols if c in df.columns]
+        missing_cols = [c for c in expected_cols if c not in df.columns]
+        
+        if missing_cols:
+            print(f" ⚠ Missing columns: {missing_cols}")
+        
         final_cols = available_cols + ['_source_file', '_ingested_at']
-
         df_to_load = df[final_cols].copy()
 
         print(f" → Loading {len(df_to_load)} rows with columns: {final_cols}")
@@ -171,19 +196,49 @@ def load_marketing_staging_data(**context):
             )
 
             print(f" ✓ Loaded into staging.{table_name}")
-            load_summary.append({"file": file_name, "table": table_name, "rows": len(df_to_load), "status": "SUCCESS"})
+            load_summary.append({
+                "file": file_name,
+                "table": table_name,
+                "rows": len(df_to_load),
+                "status": "SUCCESS"
+            })
 
         except Exception as e:
             print(f" ✗ Failed loading {file_name}: {str(e)}")
-            load_summary.append({"file": file_name, "table": table_name, "rows": 0, "status": f"FAILED: {str(e)}"})
+            load_summary.append({
+                "file": file_name,
+                "table": table_name,
+                "rows": 0,
+                "status": f"FAILED: {str(e)}"
+            })
 
+    # Print summary
     print("=" * 70)
     print("LOAD SUMMARY")
     print("=" * 70)
     for item in load_summary:
-        print(f"{item['file']} → {item['table']}: {item['status']} ({item['rows']} rows)")
+        status_icon = "✓" if item['status'] == 'SUCCESS' else "✗"
+        print(f"{status_icon} {item['file']} → {item['table']}: {item['status']} ({item['rows']} rows)")
+
+    # Verify counts
+    print("\nSTAGING TABLE ROW COUNTS:")
+    conn = engine.raw_connection()
+    cursor = conn.cursor()
+    
+    tables = ['mkt_campaigns_raw', 'mkt_campaign_transactions_raw']
+    for table in tables:
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM staging.{table};")
+            count = cursor.fetchone()[0]
+            print(f"  staging.{table}: {count} rows")
+        except Exception as e:
+            print(f"  staging.{table}: Error - {str(e)}")
+    
+    cursor.close()
+    conn.close()
 
     context['ti'].xcom_push(key='load_summary', value=load_summary)
+
 
 # -------------------------------------------------------------------
 # Truncate staging tables before load
@@ -212,6 +267,7 @@ def truncate_staging_tables():
     cursor.close()
     conn.close()
 
+
 # -------------------------------------------------------------------
 # DAG Definition
 # -------------------------------------------------------------------
@@ -233,7 +289,6 @@ with DAG(
     load_task = PythonOperator(
         task_id='load_marketing_staging_data',
         python_callable=load_marketing_staging_data,
-        provide_context=True
     )
 
     truncate_task >> load_task

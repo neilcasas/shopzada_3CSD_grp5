@@ -86,9 +86,9 @@ def process_and_load_orders(**context):
         # Remove duplicates within chunk
         orders_chunk = orders_chunk.drop_duplicates(subset=['order_id'], keep='first')
         
-        # Parse dates
-        orders_chunk['transaction_date'] = pd.to_datetime(orders_chunk['transaction_date'], errors='coerce')
-        orders_chunk['estimated_arrival'] = pd.to_datetime(orders_chunk['estimated_arrival'], errors='coerce')
+        # Parse dates with explicit format handling
+        orders_chunk['transaction_date'] = pd.to_datetime(orders_chunk['transaction_date'], errors='coerce', format='mixed')
+        orders_chunk['estimated_arrival'] = pd.to_datetime(orders_chunk['estimated_arrival'], errors='coerce', format='mixed')
         
         # Remove invalid dates
         orders_chunk = orders_chunk[orders_chunk['transaction_date'].notna()]
@@ -128,9 +128,13 @@ def process_and_load_orders(**context):
         )
         orders_merged['delay_in_days'] = orders_merged['delay_in_days'].fillna(0).astype(int)
         
-        # Convert NaT to None for SQL compatibility
-        orders_merged['estimated_arrival'] = orders_merged['estimated_arrival'].where(pd.notna(orders_merged['estimated_arrival']), None)
-        orders_merged['actual_arrival'] = orders_merged['actual_arrival'].where(pd.notna(orders_merged['actual_arrival']), None)
+        # Helper function to convert pandas NaT/NaN to Python None
+        def to_python_value(val):
+            if pd.isna(val):
+                return None
+            if isinstance(val, pd.Timestamp):
+                return val.to_pydatetime()
+            return val
         
         # Insert orders (batch insert for better performance)
         insert_batch = []
@@ -138,9 +142,9 @@ def process_and_load_orders(**context):
             insert_batch.append((
                 row['order_id'],
                 row['user_id'],
-                row['transaction_date'],
-                row['estimated_arrival'],
-                row['actual_arrival'],
+                to_python_value(row['transaction_date']),
+                to_python_value(row['estimated_arrival']),
+                to_python_value(row['actual_arrival']),
                 row['delay_in_days'],
                 row['is_delayed']
             ))
@@ -170,9 +174,9 @@ def process_and_load_orders(**context):
                     """, (
                         row['order_id'],
                         row['user_id'],
-                        row['transaction_date'],
-                        row['estimated_arrival'],
-                        row['actual_arrival'],
+                        to_python_value(row['transaction_date']),
+                        to_python_value(row['estimated_arrival']),
+                        to_python_value(row['actual_arrival']),
                         row['delay_in_days'],
                         row['is_delayed']
                     ))
