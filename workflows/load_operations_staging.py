@@ -8,6 +8,15 @@ import os
 from pathlib import Path
 import pickle
 
+def normalize_column_name(column_name):
+    """Normalize column names: lowercase, replace spaces/dashes with underscores."""
+    if not isinstance(column_name, str):
+        return column_name
+    normalized = column_name.strip().lower().replace(' ', '_').replace('-', '_')
+    while '__' in normalized:
+        normalized = normalized.replace('__', '_')
+    return normalized
+
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
@@ -109,6 +118,9 @@ def detect_and_load_file(file_path):
             if df.index.name or not all(df.index == range(len(df))):
                 df.reset_index(inplace=True)
                 df.rename(columns={df.columns[0]: 'raw_index'}, inplace=True)
+        
+        # Normalize column names (e.g., "delay in days" -> "delay_in_days")
+        df.columns = [normalize_column_name(col) for col in df.columns]
         
         print(f"  → Shape: {df.shape}")
         print(f"  → Columns: {df.columns.tolist()}")
