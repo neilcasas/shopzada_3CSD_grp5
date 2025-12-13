@@ -131,42 +131,18 @@ def populate_fact_campaign_response(**context):
 
     if orders_with_campaigns == 0:
         # Try to get from core_campaigns if it has transactional data
-        cur.execute("SELECT COUNT(*) FROM ods.core_campaigns WHERE order_id IS NOT NULL;")
+        cur.execute("SELECT COUNT(*) FROM ods.core_campaigns WHERE campaign_id IS NOT NULL;")
         trans_campaigns = cur.fetchone()[0]
 
         if trans_campaigns > 0:
-            print(f"Found {trans_campaigns:,} transactional campaign records")
-            # Process from core_campaigns (transactional campaign data)
-            campaign_df = pd.read_sql("""
-                SELECT 
-                    c.order_id,
-                    c.campaign_id,
-                    c.user_id,
-                    c.transaction_date,
-                    c.order_total_amount,
-                    c.order_discount_amount,
-                    c.order_net_amount
-                FROM ods.core_campaigns c
-                WHERE c.order_id IS NOT NULL
-            """, engine)
-        else:
-            # Build from orders that may have campaign info
-            print("No direct campaign-order linkage. Building from available data...")
-            campaign_df = pd.read_sql("""
-                SELECT 
-                    o.order_id,
-                    o.user_id,
-                    o.merchant_id,
-                    o.transaction_date,
-                    o.total_amount as order_total_amount,
-                    o.discount_amount as order_discount_amount,
-                    o.net_amount as order_net_amount
-                FROM ods.core_orders o
-                WHERE o.discount_amount > 0 OR o.total_amount != o.net_amount
-            """, engine)
-            print(f"Found {len(campaign_df):,} orders with discounts (potential campaign responses)")
+            print(f"Found {trans_campaigns:,} campaign records but no order linkage")
+        
+        print("  ⚠ No campaign response data found. Skipping fact population.")
+        cur.close()
+        conn.close()
+        return
     else:
-        # Get orders with campaign_id
+        # Get orders with campaign_id and calculate amounts from line_items
         campaign_df = pd.read_sql("""
             SELECT 
                 o.order_id,
@@ -174,12 +150,26 @@ def populate_fact_campaign_response(**context):
                 o.user_id,
                 o.merchant_id,
                 o.transaction_date,
-                o.total_amount as order_total_amount,
-                o.discount_amount as order_discount_amount,
-                o.net_amount as order_net_amount
+                o.availed,
+                COALESCE(li.order_total, 0) as order_total_amount,
+                c.discount as campaign_discount_pct
             FROM ods.core_orders o
+            LEFT JOIN (
+                SELECT order_id, SUM(quantity * price) as order_total
+                FROM ods.core_line_items
+                GROUP BY order_id
+            ) li ON o.order_id = li.order_id
+            LEFT JOIN ods.core_campaigns c ON o.campaign_id = c.campaign_id
             WHERE o.campaign_id IS NOT NULL
         """, engine)
+        
+        # Calculate discount and net amounts
+        campaign_df['order_discount_amount'] = campaign_df.apply(
+            lambda row: row['order_total_amount'] * (row['campaign_discount_pct'] / 100) 
+            if pd.notna(row['campaign_discount_pct']) and row['availed'] == True else 0,
+            axis=1
+        )
+        campaign_df['order_net_amount'] = campaign_df['order_total_amount'] - campaign_df['order_discount_amount']
 
     if campaign_df.empty:
         print("  ⚠ No campaign response data found. Skipping fact population.")
