@@ -1,3 +1,7 @@
 pyarrow
 openpyxl
 flask-session
+
+# Testing
+pytest>=7.0.0
+psycopg2-binary>=2.9.0
