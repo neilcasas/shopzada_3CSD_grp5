@@ -93,6 +93,15 @@ def detect_and_load_file(file_path):
                 df.insert(0, 'raw_index', range(len(df)))
 
             print(f"  → Loaded as CSV with columns: {df.columns.tolist()}")
+        elif file_ext == '.json':
+            df = pd.read_json(file_path, dtype=str)
+            df.columns = [normalize_column_name(col) for col in df.columns]
+
+            # Ensure raw_index exists
+            if 'raw_index' not in df.columns:
+                df.insert(0, 'raw_index', range(len(df)))
+
+            print(f"  → Loaded as JSON with columns: {df.columns.tolist()}")
         else:
             print(f"  ✗ Unsupported file type: {file_ext}")
             return None, None

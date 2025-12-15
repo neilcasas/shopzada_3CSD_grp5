@@ -477,17 +477,39 @@ def process_ods_chunks(**context):
             orders_df['delay_in_days'] = pd.to_numeric(orders_df['delay_in_days'], errors='coerce').fillna(0).astype(int)
             orders_df['is_delayed'] = orders_df['delay_in_days'] > 0
             
-            # Parse estimated_arrival from duration string (e.g., "13days" → 13)
-            # Then calculate actual estimated_arrival date = transaction_date + days
+            # Parse estimated_arrival - handles both:
+            # 1. Duration strings like "13days", "15 days" → transaction_date + days
+            # 2. Actual dates like "2024-12-20" → parsed directly
             def parse_estimated_arrival(row):
                 if pd.isna(row['transaction_date']):
                     return None
-                est_str = str(row['estimated_arrival']) if pd.notna(row['estimated_arrival']) else ''
-                # Extract numeric days from strings like "13days", "15 days", etc.
-                match = re.search(r'(\d+)', est_str)
+                est_val = row['estimated_arrival']
+                if pd.isna(est_val):
+                    return None
+                est_str = str(est_val).strip()
+                
+                # First, try to parse as an actual date (ISO format like 2024-12-20)
+                try:
+                    parsed_date = pd.to_datetime(est_str, format='%Y-%m-%d', errors='raise')
+                    return parsed_date
+                except:
+                    pass
+                
+                # Try other common date formats
+                try:
+                    parsed_date = pd.to_datetime(est_str, format='mixed', errors='raise')
+                    # Only accept if year is reasonable (2000-2030)
+                    if 2000 <= parsed_date.year <= 2030:
+                        return parsed_date
+                except:
+                    pass
+                
+                # Otherwise, extract numeric days from strings like "13days", "15 days"
+                match = re.search(r'^(\d+)\s*days?$', est_str.lower())
                 if match:
                     days = int(match.group(1))
                     return row['transaction_date'] + timedelta(days=days)
+                
                 return None
             
             orders_df['estimated_arrival'] = orders_df.apply(parse_estimated_arrival, axis=1)

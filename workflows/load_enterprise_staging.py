@@ -58,6 +58,15 @@ def detect_and_load_file(file_path):
             dfs = pd.read_html(file_path)
             df = dfs[0]  # Load first table
             print(f"  → Loaded as HTML")
+        elif file_ext == '.json':
+            import json
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                df = pd.DataFrame(data)
+            else:
+                df = pd.DataFrame([data])
+            print(f"  → Loaded as JSON")
         else:
             print(f"  ✗ Unsupported file type: {file_ext}")
             return None, None

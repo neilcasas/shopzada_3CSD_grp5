@@ -219,9 +219,12 @@ def load_to_ods(**context):
     if error_count > 0:
         print(f"  ⚠ Failed inserts: {error_count}")
     print(f"\nFinal statistics:")
-    print(f"  Total campaigns: {stats[0]}")
-    print(f"  Discount range: {stats[1]:.2f}% - {stats[2]:.2f}%")
-    print(f"  Average discount: {stats[3]:.2f}%")
+    print(f"  Total campaigns: {stats[0] or 0}")
+    if stats[0] and stats[0] > 0:
+        print(f"  Discount range: {stats[1]:.2f}% - {stats[2]:.2f}%")
+        print(f"  Average discount: {stats[3]:.2f}%")
+    else:
+        print("  No campaigns loaded - discount statistics unavailable")
     
     cursor.close()
     conn.close()
