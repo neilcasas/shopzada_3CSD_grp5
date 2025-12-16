@@ -80,12 +80,10 @@ def detect_and_load_file(file_path):
             print(f"  → Loaded as Excel")
             
         elif file_ext == '.csv':
-            try:
-                df = pd.read_csv(file_path, index_col=0)
-                df.reset_index(inplace=True)
-                df.rename(columns={df.columns[0]: 'raw_index'}, inplace=True)
-            except:
-                df = pd.read_csv(file_path)
+            df = pd.read_csv(file_path)
+            # Add raw_index as the row number (not from data columns)
+            if 'raw_index' not in df.columns:
+                df.insert(0, 'raw_index', range(len(df)))
             print(f"  → Loaded as CSV")
             
         elif file_ext == '.parquet':

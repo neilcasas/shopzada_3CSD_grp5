@@ -721,29 +721,43 @@ def ensure_dim_date(**context):
     cur = conn.cursor()
     
     cur.execute("SELECT COUNT(*) FROM dw.dim_date;")
-    if cur.fetchone()[0] == 0:
+    existing_count = cur.fetchone()[0]
+    
+    # Define the date range we need (wider range to handle future estimated arrivals)
+    start_date = datetime(2019, 1, 1)
+    end_date = datetime(2035, 12, 31)  # Extended to 2035 to handle future dates
+    
+    if existing_count == 0:
         print("Populating dim_date...")
-        start_date = datetime(2019, 1, 1)
-        end_date = datetime(2025, 12, 31)
-        current = start_date
-        
-        records = []
-        while current <= end_date:
-            date_key = int(current.strftime('%Y%m%d'))
-            records.append((
-                date_key, current.date(), current.weekday() + 1,
-                current.month, current.strftime('%B'),
-                (current.month - 1) // 3 + 1, current.year,
-                current.weekday() >= 5
-            ))
-            current += timedelta(days=1)
-        
-        psycopg2.extras.execute_values(cur, """
-            INSERT INTO dw.dim_date (date_key, date, day_of_week, month, month_name, quarter, year, is_weekend)
-            VALUES %s ON CONFLICT DO NOTHING
-        """, records)
-        conn.commit()
-        print(f"  ✓ Inserted {len(records)} dates")
+    else:
+        # Check if we need to extend the range
+        cur.execute("SELECT MAX(date) FROM dw.dim_date;")
+        max_date = cur.fetchone()[0]
+        if max_date and max_date >= end_date.date():
+            print(f"  dim_date already populated with {existing_count} dates (up to {max_date})")
+            cur.close()
+            conn.close()
+            return
+        print(f"Extending dim_date range to {end_date.date()}...")
+    
+    current = start_date
+    records = []
+    while current <= end_date:
+        date_key = int(current.strftime('%Y%m%d'))
+        records.append((
+            date_key, current.date(), current.weekday() + 1,
+            current.month, current.strftime('%B'),
+            (current.month - 1) // 3 + 1, current.year,
+            current.weekday() >= 5
+        ))
+        current += timedelta(days=1)
+    
+    psycopg2.extras.execute_values(cur, """
+        INSERT INTO dw.dim_date (date_key, date, day_of_week, month, month_name, quarter, year, is_weekend)
+        VALUES %s ON CONFLICT DO NOTHING
+    """, records)
+    conn.commit()
+    print(f"  ✓ Inserted/updated {len(records)} dates (2019-2035)")
     
     cur.close()
     conn.close()
@@ -808,7 +822,12 @@ def process_fact_tables_streaming(**context):
     cur.execute("SELECT campaign_id, campaign_key FROM dw.dim_campaign;")
     campaign_lookup = {row[0]: row[1] for row in cur.fetchall()}
     
+    # Load valid date keys to handle FK constraints
+    cur.execute("SELECT date_key FROM dw.dim_date;")
+    valid_date_keys = set(row[0] for row in cur.fetchall())
+    
     print(f"  Loaded lookups: users={len(user_lookup)}, products={len(product_lookup)}, merchants={len(merchant_lookup)}")
+    print(f"  Valid date keys: {len(valid_date_keys)} (range: {min(valid_date_keys)} - {max(valid_date_keys)})")
     
     # Get chunks ready for facts
     cur.execute("""
@@ -840,6 +859,7 @@ def process_fact_tables_streaming(**context):
             """, engine)
             
             fact_orders_records = []
+            skipped_orders = 0
             for _, row in orders_df.iterrows():
                 user_key = user_lookup.get(row['user_id'])
                 merchant_key = merchant_lookup.get(row['merchant_id']) if pd.notna(row.get('merchant_id')) else None
@@ -851,12 +871,18 @@ def process_fact_tables_streaming(**context):
                 if pd.notna(row.get('transaction_date')):
                     try:
                         order_date_key = int(pd.to_datetime(row['transaction_date']).strftime('%Y%m%d'))
+                        # Validate date key exists in dim_date
+                        if order_date_key not in valid_date_keys:
+                            order_date_key = None
                     except:
                         pass
                 
                 if pd.notna(row.get('estimated_arrival')):
                     try:
                         est_arrival_key = int(pd.to_datetime(row['estimated_arrival']).strftime('%Y%m%d'))
+                        # Validate date key exists in dim_date
+                        if est_arrival_key not in valid_date_keys:
+                            est_arrival_key = None
                     except:
                         pass
                 
@@ -905,6 +931,9 @@ def process_fact_tables_streaming(**context):
                 if pd.notna(row.get('transaction_date')):
                     try:
                         order_date_key = int(pd.to_datetime(row['transaction_date']).strftime('%Y%m%d'))
+                        # Validate date key exists in dim_date
+                        if order_date_key not in valid_date_keys:
+                            order_date_key = None
                     except:
                         pass
                 
