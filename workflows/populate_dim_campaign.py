@@ -44,7 +44,9 @@ def populate_dim_campaign(**context):
 
     print(f"Rows read from ODS: {len(campaigns_df):,}")
     if len(campaigns_df) == 0:
-        raise ValueError("No rows in ods.core_campaigns. Run populate_core_campaigns DAG first.")
+        print("⚠ No rows in ods.core_campaigns - skipping dimension load (run populate_core_campaigns DAG first)")
+        print("=" * 70)
+        return
 
     # Basic cleaning
     for col in ['campaign_id', 'campaign_name']:

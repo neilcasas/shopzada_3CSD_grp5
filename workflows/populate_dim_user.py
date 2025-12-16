@@ -43,7 +43,9 @@ def populate_dim_user(**context):
 
     print(f"Rows read from ODS: {len(users_df):,}")
     if len(users_df) == 0:
-        raise ValueError("No rows in ods.core_users. Run populate_core_users DAG first.")
+        print("⚠ No rows in ods.core_users - skipping dimension load (run populate_core_users DAG first)")
+        print("=" * 70)
+        return
 
     # Basic cleaning (consistent with your populate_core_users)
     cols_to_trim = ['user_id','name','gender','street','city','state','country','user_type','job_title','job_level']

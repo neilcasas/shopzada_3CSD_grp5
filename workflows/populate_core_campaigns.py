@@ -107,7 +107,10 @@ def transform_and_clean(**context):
         campaigns.loc[campaigns['discount'] < 0, 'discount'] = 0
         campaigns.loc[campaigns['discount'] > 100, 'discount'] = 100
         
-        print(f"  → Discount range: {campaigns['discount'].min():.2f}% - {campaigns['discount'].max():.2f}%")
+        if not campaigns.empty:
+            print(f"  → Discount range: {campaigns['discount'].min():.2f}% - {campaigns['discount'].max():.2f}%")
+        else:
+            print("  → No campaigns to process.")
     
     # Standardize campaign_name (strip whitespace)
     if 'campaign_name' in campaigns.columns:
@@ -219,12 +222,12 @@ def load_to_ods(**context):
     if error_count > 0:
         print(f"  ⚠ Failed inserts: {error_count}")
     print(f"\nFinal statistics:")
-    print(f"  Total campaigns: {stats[0] or 0}")
-    if stats[0] and stats[0] > 0:
+    print(f"  Total campaigns: {stats[0]}")
+    if stats[0] > 0:
         print(f"  Discount range: {stats[1]:.2f}% - {stats[2]:.2f}%")
         print(f"  Average discount: {stats[3]:.2f}%")
     else:
-        print("  No campaigns loaded - discount statistics unavailable")
+        print("  No campaigns loaded.")
     
     cursor.close()
     conn.close()

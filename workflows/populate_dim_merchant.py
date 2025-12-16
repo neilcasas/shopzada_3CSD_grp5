@@ -44,7 +44,9 @@ def populate_dim_merchant(**context):
 
     print(f"Rows read from ODS: {len(merchants_df):,}")
     if len(merchants_df) == 0:
-        raise ValueError("No rows in ods.core_merchants. Run populate_core_enterprise DAG first.")
+        print("⚠ No rows in ods.core_merchants - skipping dimension load (run populate_core_enterprise DAG first)")
+        print("=" * 70)
+        return
 
     # Basic cleaning
     for col in ['merchant_id', 'name', 'city', 'state', 'country']:

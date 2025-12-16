@@ -44,7 +44,9 @@ def populate_dim_staff(**context):
 
     print(f"Rows read from ODS: {len(staff_df):,}")
     if len(staff_df) == 0:
-        raise ValueError("No rows in ods.core_staff. Run populate_core_enterprise DAG first.")
+        print("⚠ No rows in ods.core_staff - skipping dimension load (run populate_core_enterprise DAG first)")
+        print("=" * 70)
+        return
 
     # Basic cleaning
     for col in ['staff_id', 'name', 'job_level']:

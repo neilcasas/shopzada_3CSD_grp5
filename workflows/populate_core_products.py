@@ -129,7 +129,10 @@ def transform_and_clean(**context):
     
     print(f"\n✓ Final cleaned data shape: {products.shape}")
     print(f"  Columns: {products.columns.tolist()}")
-    print(f"  Price range: ${products['price'].min():.2f} - ${products['price'].max():.2f}")
+    if not products.empty:
+        print(f"  Price range: ${products['price'].min():.2f} - ${products['price'].max():.2f}")
+    else:
+        print("  No products to process.")
     
     # Store in XCom
     context['ti'].xcom_push(key='cleaned_data', value=products.to_json(orient='split'))
@@ -219,8 +222,11 @@ def load_to_ods(**context):
     print(f"\nFinal statistics:")
     print(f"  Total products: {stats[0]}")
     print(f"  Product types: {stats[1]}")
-    print(f"  Price range: ${stats[2]:.2f} - ${stats[3]:.2f}")
-    print(f"  Average price: ${stats[4]:.2f}")
+    if stats[0] > 0:
+        print(f"  Price range: ${stats[2]:.2f} - ${stats[3]:.2f}")
+        print(f"  Average price: ${stats[4]:.2f}")
+    else:
+        print("  No products loaded.")
     
     cursor.close()
     conn.close()
