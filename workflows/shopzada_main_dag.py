@@ -210,12 +210,12 @@ with DAG(
     # Marketing pipeline: staging → ODS → DW
     mkt_staging >> mkt_ods >> mkt_dw >> mkt_complete
 
-    # Operations pipeline: staging → streaming (handles ODS → DW → Facts)
-    ops_staging >> ops_streaming >> ops_complete
+    # Operations pipeline: staging first, then wait for ALL dimensions before streaming
+    # The streaming pipeline processes facts internally, so it needs dims ready
+    [biz_complete, cust_complete, ent_complete, mkt_complete, ops_staging] >> ops_streaming >> ops_complete
 
     # ALL departments must complete before fact_campaign_response
-    # This ensures core_orders is populated (from ops) + all dimensions exist
     [biz_complete, cust_complete, ent_complete, mkt_complete, ops_complete] >> all_complete
     
     # Fact campaign response is the final step before end
-    all_complete >> fact_campaign_response >> end
+    ops_complete >> fact_campaign_response >> end
